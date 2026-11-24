@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NeuroUQ – Uncertainty-aware tumour segmentation</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#fff; --ink:#16202c; --muted:#5d6b7b; --line:#dde2e8;
+    --accent:#1f5fa8; --accent-ink:#fff; --warn:#b4501a; --warn-bg:#fdf0e6; --ok:#1d7a4d; --ok-bg:#e6f5ec;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0f141a; --card:#171e26; --ink:#e7ecf2; --muted:#93a1b1; --line:#2a3541;
+      --accent:#5aa0ea; --accent-ink:#0b1623; --warn:#f0a066; --warn-bg:#2b1d12; --ok:#58c58d; --ok-bg:#12261b;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  header{padding:20px 16px 4px;max-width:1180px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 2px;letter-spacing:-.01em}
+  .sub{color:var(--muted);margin:0}
+  main{max-width:1180px;margin:0 auto;padding:12px 16px 40px;display:grid;gap:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+  .controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+  h2{font-size:14px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 10px}
+  label{display:block;font-size:13px;color:var(--muted);margin:8px 0 2px}
+  input[type=number],input[type=file]{width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+  input[type=range]{width:100%}
+  button{margin-top:12px;padding:9px 16px;border:0;border-radius:8px;background:var(--accent);color:var(--accent-ink);font-weight:600;cursor:pointer}
+  button:disabled{opacity:.5;cursor:wait}
+  button.secondary{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
+  figure{margin:0}
+  figure img{width:100%;height:auto;display:block;border-radius:8px;background:#000;image-rendering:pixelated}
+  figcaption{font-size:13px;color:var(--muted);margin-top:6px}
+  figcaption b{color:var(--ink)}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+  .stat{border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+  .stat .v{font-size:20px;font-weight:650;font-variant-numeric:tabular-nums}
+  .stat .k{font-size:12px;color:var(--muted)}
+  .flag{padding:10px 14px;border-radius:10px;font-weight:600;margin-bottom:12px}
+  .flag.review{background:var(--warn-bg);color:var(--warn)}
+  .flag.ok{background:var(--ok-bg);color:var(--ok)}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin-top:10px}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px;vertical-align:-1px}
+  .err{color:var(--warn);font-weight:600;margin-top:8px}
+  footer{max-width:1180px;margin:0 auto;padding:0 16px 30px;color:var(--muted);font-size:13px}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>NeuroUQ · Uncertainty-aware brain-tumour segmentation</h1>
+  <p class="sub">Segments a tumour on an MRI slice and shows <em>where the model is unsure</em> – so a clinician knows what to double-check.</p>
+</header>
+
+<main>
+  <section class="controls">
+    <div class="card">
+      <h2>1 · Try a synthetic case</h2>
+      <label for="seed">Case number (seed)</label>
+      <input id="seed" type="number" value="7" min="0">
+      <label for="noise">MRI noise level: <b id="noiseV">0.05</b></label>
+      <input id="noise" type="range" min="0.02" max="0.25" step="0.01" value="0.05">
+      <button id="btnSample">Generate &amp; analyse</button>
+      <button id="btnRandom" class="secondary">Random case</button>
+    </div>
+    <div class="card">
+      <h2>2 · Or upload a slice</h2>
+      <label for="file">FLAIR slice (.png / .jpg / .npy)</label>
+      <input id="file" type="file" accept=".png,.jpg,.jpeg,.npy,.bmp,.tif,.tiff">
+      <button id="btnUpload">Analyse upload</button>
+      <p class="sub" style="font-size:13px;margin-top:10px">Slices are resized to 128×128. Best results with skull-stripped axial FLAIR images.</p>
+    </div>
+  </section>
+
+  <div id="error" class="err hidden"></div>
+
+  <section id="result" class="card hidden">
+    <div id="flag" class="flag"></div>
+    <div class="grid">
+      <figure><img id="i_input" alt="Input MRI slice"><figcaption><b>Input slice</b></figcaption></figure>
+      <figure><img id="i_seg" alt="Segmentation overlay"><figcaption><b>Segmentation</b> – red: predicted tumour<span id="gtNote"> · green: ground truth</span></figcaption></figure>
+      <figure><img id="i_ent" alt="Predictive entropy map"><figcaption><b>Total uncertainty</b> (predictive entropy)</figcaption></figure>
+      <figure><img id="i_epi" alt="Epistemic uncertainty map"><figcaption><b>Epistemic</b> – model disagreement (reducible with more data)</figcaption></figure>
+      <figure><img id="i_ale" alt="Aleatoric uncertainty map"><figcaption><b>Aleatoric</b> – inherent ambiguity (noise, blurry edges)</figcaption></figure>
+    </div>
+    <div class="legend"><span><span class="dot" style="background:#000;border:1px solid #888"></span>certain</span><span><span class="dot" style="background:#b73779"></span>moderately uncertain</span><span><span class="dot" style="background:#fcfdbf"></span>highly uncertain (1 bit = coin-flip)</span></div>
+    <h2 style="margin-top:20px">Measurements</h2>
+    <div id="stats" class="stats"></div>
+    <p class="sub" id="source" style="margin-top:12px;font-size:13px"></p>
+  </section>
+</main>
+<footer>⚠ Research prototype for a university project. Not a medical device; never use it for diagnosis or treatment decisions.</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+const labels = {
+  tumour_pixels:["Predicted tumour area","px"], tumour_fraction_of_brain:["Share of brain",""],
+  dice_vs_ground_truth:["Dice vs ground truth",""], mean_entropy_in_brain_bits:["Mean total uncertainty","bits"],
+  mean_epistemic_bits:["Mean epistemic","bits"], mean_aleatoric_bits:["Mean aleatoric","bits"],
+  uncertain_pixels_pct:["Pixels near coin-flip","%"], review_score:["Review score",""]
+};
+function busy(b){document.querySelectorAll("button").forEach(x=>x.disabled=b)}
+function fail(m){const e=$("error");e.textContent=m;e.classList.toggle("hidden",!m)}
+function show(d){
+  fail("");
+  $("i_input").src=d.images.input;$("i_seg").src=d.images.segmentation;
+  $("i_ent").src=d.images.entropy;$("i_epi").src=d.images.epistemic;$("i_ale").src=d.images.aleatoric;
+  const s=d.stats, f=$("flag");
+  f.className="flag "+(s.needs_review?"review":"ok");
+  f.textContent=s.needs_review
+    ? "⚠ Review recommended – the model is unusually uncertain on this slice."
+    : "✓ Uncertainty within the normal range for this model (still verify the result).";
+  $("gtNote").classList.toggle("hidden", s.dice_vs_ground_truth===undefined);
+  $("stats").innerHTML=Object.entries(labels).filter(([k])=>s[k]!==undefined).map(([k,[n,u]])=>
+    `<div class="stat"><div class="v">${s[k]}${u?` <span style="font-size:12px;font-weight:400">${u}</span>`:""}</div><div class="k">${n}${k==="review_score"?` (flag &gt; ${s.review_threshold})`:""}</div></div>`).join("");
+  $("source").textContent=`${s.source} · backend: ${s.backend}`;
+  $("result").classList.remove("hidden");
+}
+async function call(p,opt){
+  busy(true);
+  try{const r=await fetch(p,opt);const d=await r.json();if(!r.ok)throw new Error(d.error||r.statusText);show(d)}
+  catch(e){fail(e.message)}finally{busy(false)}
+}
+$("noise").oninput=e=>$("noiseV").textContent=(+e.target.value).toFixed(2);
+$("btnSample").onclick=()=>call(`/api/sample?seed=${$("seed").value||0}&noise=${$("noise").value}`);
+$("btnRandom").onclick=()=>{$("seed").value=Math.floor(Math.random()*10000);$("btnSample").click()};
+$("btnUpload").onclick=()=>{
+  const f=$("file").files[0];if(!f){fail("Choose a file first.");return}
+  const fd=new FormData();fd.append("file",f);call("/api/segment",{method:"POST",body:fd});
+};
+</script>
+</body>
+</html>
